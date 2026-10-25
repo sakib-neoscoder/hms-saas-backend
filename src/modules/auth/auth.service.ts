@@ -23,6 +23,7 @@ import {
   VerifyOtpDto,
   RefreshTokenDto,
   RegisterUserDto,
+  UpdateProfileDto,
 } from './dto';
 import { JwtPayload } from './jwt.strategy';
 
@@ -274,7 +275,7 @@ export class AuthService {
 
     if (!user) {
       isNewUser = true;
-      const defaultName = dto.fullName?.trim() || `Patient ${cleanPhone.slice(-4)}`;
+      const defaultName = `User ${cleanPhone.slice(-4)}`;
       [user] = await this.db
         .insert(users)
         .values({
@@ -291,7 +292,6 @@ export class AuthService {
         .set({
           isPhoneVerified: true,
           lastLoginAt: new Date(),
-          ...(dto.fullName ? { fullName: dto.fullName.trim() } : {}),
         })
         .where(eq(users.id, user.id));
     }
@@ -352,6 +352,47 @@ export class AuthService {
     const redisKey = `refresh_token:${userId}`;
     await this.redisService.del(redisKey);
     return { success: true, message: 'Logged out successfully' };
+  }
+
+  /**
+   * Update authenticated user's profile (name & optional email) during/after onboarding
+   */
+  async updateProfile(userId: string, dto: UpdateProfileDto): Promise<SanitizedUser> {
+    const [currentUser] = await this.db
+      .select()
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+
+    if (!currentUser) {
+      throw new UnauthorizedException('User not found or deactivated');
+    }
+
+    const cleanEmail = dto.email ? dto.email.trim().toLowerCase() : null;
+
+    if (cleanEmail && cleanEmail !== currentUser.email) {
+      const [existingEmail] = await this.db
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.email, cleanEmail))
+        .limit(1);
+
+      if (existingEmail && existingEmail.id !== userId) {
+        throw new ConflictException('Email address is already registered');
+      }
+    }
+
+    const [updatedUser] = await this.db
+      .update(users)
+      .set({
+        fullName: dto.fullName.trim(),
+        ...(cleanEmail !== null ? { email: cleanEmail } : {}),
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, userId))
+      .returning();
+
+    return this.sanitizeUser(updatedUser);
   }
 
   /**

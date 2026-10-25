@@ -2,6 +2,7 @@ import {
   Controller,
   Post,
   Get,
+  Patch,
   Body,
   HttpCode,
   HttpStatus,
@@ -15,6 +16,7 @@ import {
   VerifyOtpDto,
   RefreshTokenDto,
   RegisterUserDto,
+  UpdateProfileDto,
 } from './dto';
 import { Public } from '../../common/decorators/public.decorator';
 import { CurrentUser, AuthenticatedUser } from '../../common/decorators/current-user.decorator';
@@ -90,5 +92,18 @@ export class AuthController {
   @ApiResponse({ status: 200, description: 'Returns current user details' })
   async getProfile(@CurrentUser() user: AuthenticatedUser) {
     return user;
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @Patch('profile')
+  @ApiOperation({ summary: 'Update authenticated user profile name and optional email (e.g. after OTP onboarding)' })
+  @ApiResponse({ status: 200, description: 'Profile updated successfully' })
+  @ApiResponse({ status: 409, description: 'Email address already in use' })
+  async updateProfile(
+    @CurrentUser('id') userId: string,
+    @Body() dto: UpdateProfileDto,
+  ) {
+    return this.authService.updateProfile(userId, dto);
   }
 }

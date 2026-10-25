@@ -1,5 +1,5 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNotEmpty, IsString, Length, Matches, IsOptional } from 'class-validator';
+import { ApiProperty } from '@nestjs/swagger';
+import { IsNotEmpty, IsString, Length, Matches } from 'class-validator';
 import { IsBdPhoneNumber } from '../../../common/validators/bd-phone.validator';
 
 export class VerifyOtpDto {
@@ -20,12 +20,4 @@ export class VerifyOtpDto {
   @Matches(/^\d{6}$/, { message: 'OTP must contain numbers only' })
   @IsNotEmpty()
   otp!: string;
-
-  @ApiPropertyOptional({
-    example: 'Mohammad Rahim',
-    description: 'Full name of the patient (used if registering for first time)',
-  })
-  @IsString()
-  @IsOptional()
-  fullName?: string;
 }

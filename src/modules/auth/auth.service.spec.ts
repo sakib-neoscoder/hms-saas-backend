@@ -161,13 +161,14 @@ describe('AuthService Remediation Tests', () => {
       expect(mockRedisService.del).toHaveBeenCalledWith(`otp_attempts:${phone}`);
     });
 
-    it('should clean up OTP and attempts on successful verification', async () => {
+    it('should auto-register new user with default name and isNewUser: true when not found', async () => {
       mockRedisService.get.mockResolvedValue(validOtp);
-      mockDb.limit.mockResolvedValue([
+      mockDb.limit.mockResolvedValue([]); // User not found
+      mockDb.returning.mockResolvedValue([
         {
-          id: 'user-patient-id',
+          id: 'new-user-id',
           phone,
-          fullName: 'Test Patient',
+          fullName: 'User 5678',
           email: null,
           isPhoneVerified: true,
           isActive: true,
@@ -176,9 +177,74 @@ describe('AuthService Remediation Tests', () => {
       ]);
 
       const result = await authService.verifyOtp({ phone, otp: validOtp });
+      expect(result.isNewUser).toBe(true);
+      expect(result.user.fullName).toBe('User 5678');
+      expect(mockDb.insert).toHaveBeenCalled();
+    });
+
+    it('should clean up OTP and attempts on successful verification for existing user', async () => {
+      mockRedisService.get.mockResolvedValue(validOtp);
+      mockDb.limit.mockResolvedValue([
+        {
+          id: 'user-patient-id',
+          phone,
+          fullName: 'Existing Name',
+          email: null,
+          isPhoneVerified: true,
+          isActive: true,
+          avatarR2Key: null,
+        },
+      ]);
+
+      const result = await authService.verifyOtp({ phone, otp: validOtp });
+      expect(result.isNewUser).toBe(false);
       expect(result.accessToken).toBe('mock-token');
       expect(mockRedisService.del).toHaveBeenCalledWith(`otp:${phone}`);
       expect(mockRedisService.del).toHaveBeenCalledWith(`otp_attempts:${phone}`);
+    });
+  });
+
+  describe('updateProfile', () => {
+    const userId = 'user-123';
+
+    it('should successfully update full name and email', async () => {
+      mockDb.limit
+        .mockResolvedValueOnce([{ id: userId, email: 'old@example.com' }]) // Current user
+        .mockResolvedValueOnce([]); // Duplicate check: No other user has new email
+
+      mockDb.returning.mockResolvedValue([
+        {
+          id: userId,
+          phone: '01712345678',
+          fullName: 'Updated Name',
+          email: 'new@example.com',
+          isPhoneVerified: true,
+          isActive: true,
+          avatarR2Key: null,
+        },
+      ]);
+
+      const result = await authService.updateProfile(userId, {
+        fullName: 'Updated Name',
+        email: 'new@example.com',
+      });
+
+      expect(result.fullName).toBe('Updated Name');
+      expect(result.email).toBe('new@example.com');
+      expect(mockDb.update).toHaveBeenCalled();
+    });
+
+    it('should throw ConflictException if new email is already taken by another user', async () => {
+      mockDb.limit
+        .mockResolvedValueOnce([{ id: userId, email: 'old@example.com' }]) // Current user
+        .mockResolvedValueOnce([{ id: 'other-user-999' }]); // Taken by someone else
+
+      await expect(
+        authService.updateProfile(userId, {
+          fullName: 'Updated Name',
+          email: 'taken@example.com',
+        }),
+      ).rejects.toThrow('Email address is already registered');
     });
   });
 });
