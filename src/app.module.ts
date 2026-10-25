@@ -9,6 +9,9 @@ import { QueuesModule } from './providers/queues/queues.module';
 import { StorageModule } from './providers/storage/storage.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { ClinicsModule } from './modules/clinics/clinics.module';
+import { SpecialtiesModule } from './modules/specialties/specialties.module';
+import { DoctorsModule } from './modules/doctors/doctors.module';
+import { SchedulesModule } from './modules/schedules/schedules.module';
 import { HealthModule } from './modules/health/health.module';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
@@ -31,6 +34,9 @@ import { TransformInterceptor } from './common/interceptors/transform.intercepto
     StorageModule,
     AuthModule,
     ClinicsModule,
+    SpecialtiesModule,
+    DoctorsModule,
+    SchedulesModule,
     HealthModule,
   ],
   providers: [

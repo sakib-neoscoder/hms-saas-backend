@@ -60,4 +60,28 @@ export class CreateClinicDto {
   @IsOptional()
   @MaxLength(20)
   smsSenderId?: string;
+
+  @ApiPropertyOptional({
+    example: '01711223344',
+    description: '11-digit Bangladeshi mobile number of Clinic Admin (auto-provisions user if not registered)',
+  })
+  @IsString()
+  @IsOptional()
+  adminPhone?: string;
+
+  @ApiPropertyOptional({
+    example: 'Dr. M. A. Kashem',
+    description: 'Full name of Clinic Admin (used when auto-provisioning new account)',
+  })
+  @IsString()
+  @IsOptional()
+  adminName?: string;
+
+  @ApiPropertyOptional({
+    example: 'Admin@1234',
+    description: 'Initial password for Clinic Admin account to log in directly',
+  })
+  @IsString()
+  @IsOptional()
+  adminPassword?: string;
 }

@@ -2,6 +2,7 @@ import {
   Controller,
   Post,
   Get,
+  Patch,
   Body,
   Param,
   UseGuards,
@@ -21,6 +22,7 @@ import { ClinicsService } from './clinics.service';
 import { CreateClinicDto, AssignMemberDto } from './dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TenantRoleGuard } from '../../common/guards/tenant-role.guard';
+import { SuperAdminGuard } from '../../common/guards/super-admin.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { CurrentTenant } from '../../common/decorators/current-tenant.decorator';
@@ -34,14 +36,36 @@ export class ClinicsController {
   constructor(private readonly clinicsService: ClinicsService) {}
 
   @Post()
-  @ApiOperation({ summary: 'Create a new clinic tenant (creator becomes SUPER_ADMIN)' })
-  @ApiResponse({ status: 201, description: 'Clinic tenant created successfully' })
+  @ApiOperation({
+    summary: 'Submit a new clinic registration request (Creator becomes CLINIC_ADMIN, pending approval)',
+  })
+  @ApiResponse({ status: 201, description: 'Clinic registration submitted (isActive: false)' })
   @ApiResponse({ status: 409, description: 'Clinic slug already exists' })
   async createClinic(
     @Body() dto: CreateClinicDto,
     @CurrentUser('id') userId: string,
   ) {
     return this.clinicsService.createClinic(dto, userId);
+  }
+
+  @Get('pending')
+  @UseGuards(SuperAdminGuard)
+  @ApiOperation({ summary: 'List all clinics awaiting Super Admin approval (Super Admin only)' })
+  @ApiResponse({ status: 200, description: 'List of unapproved clinics' })
+  async getPendingClinics() {
+    return this.clinicsService.getPendingClinics();
+  }
+
+  @Patch(':id/approve')
+  @UseGuards(SuperAdminGuard)
+  @ApiOperation({ summary: 'Approve a pending clinic and dispatch welcome SMS (Super Admin only)' })
+  @ApiResponse({ status: 200, description: 'Clinic approved and activated' })
+  @ApiResponse({ status: 404, description: 'Clinic not found' })
+  async approveClinic(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.clinicsService.approveClinic(id, userId);
   }
 
   @Get('my-clinics')
@@ -81,7 +105,9 @@ export class ClinicsController {
     required: true,
     description: 'Target Clinic Tenant UUID',
   })
-  @ApiOperation({ summary: 'Assign a user as staff/doctor member in this clinic (Requires SUPER_ADMIN or CLINIC_ADMIN)' })
+  @ApiOperation({
+    summary: 'Assign a user as staff/doctor member in this clinic via userId or phone number',
+  })
   @ApiResponse({ status: 201, description: 'Member assigned successfully' })
   @ApiResponse({ status: 403, description: 'Forbidden: Route clinic ID mismatch or insufficient tenant permissions' })
   async assignMember(
