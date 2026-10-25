@@ -9,12 +9,15 @@ async function bootstrap() {
   const logger = new Logger('Bootstrap');
   const app = await NestFactory.create(AppModule);
 
+  // Enable graceful shutdown lifecycle hooks (calls OnApplicationShutdown on DatabaseModule & RedisService)
+  app.enableShutdownHooks();
+
   // Security Headers
   app.use(helmet());
 
-  // CORS Configuration
+  // CORS Configuration: origin: true dynamically mirrors request origin when credentials: true
   app.enableCors({
-    origin: '*',
+    origin: true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
   });
@@ -36,7 +39,7 @@ async function bootstrap() {
 
   // Swagger API Documentation Setup
   const swaggerConfig = new DocumentBuilder()
-    .setTitle('Bangladeshi Clinic & Diagnostic Management System API')
+    .setTitle('Hospital Management System API')
     .setDescription(
       'Production-grade Multi-Tenant SaaS Backend for Clinics and Diagnostic Centers in Bangladesh (Sprint 1: Foundation & Core Schema)',
     )
@@ -61,7 +64,7 @@ async function bootstrap() {
   });
 
   const configService = app.get(ConfigService);
-  const port = configService.get<number>('PORT', 4000);
+  const port = configService.get<number>('PORT', 8000);
 
   await app.listen(port);
   logger.log(`Server listening on port ${port} [Environment: ${configService.get('NODE_ENV')}]`);

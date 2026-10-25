@@ -114,7 +114,7 @@ npm run start:prod
 ### 6. Interactive API Documentation
 Navigate to:
 ```text
-http://localhost:4000/api/docs
+http://localhost:8000/api/docs
 ```
 - Includes interactive Swagger UI with Bearer JWT authorization and `x-clinic-id` tenant header injection.
 

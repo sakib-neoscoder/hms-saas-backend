@@ -58,6 +58,14 @@ export class RedisService implements OnApplicationShutdown {
     return this.client.exists(key);
   }
 
+  async incr(key: string): Promise<number> {
+    return this.client.incr(key);
+  }
+
+  async expire(key: string, ttlSeconds: number): Promise<number> {
+    return this.client.expire(key, ttlSeconds);
+  }
+
   /**
    * Acquire a distributed lock on a resource using Redis SET NX PX
    */

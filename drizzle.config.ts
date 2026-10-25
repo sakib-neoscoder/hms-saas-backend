@@ -5,7 +5,7 @@ export default defineConfig({
   out: './drizzle',
   dialect: 'postgresql',
   dbCredentials: {
-    url: process.env.DATABASE_URL || 'postgresql://clinic_user:clinic_password@localhost:5432/clinic_db',
+    url: process.env.DATABASE_URL || 'postgresql://clinic_user:clinic_password@localhost:5432/hms_master_db',
   },
   verbose: true,
   strict: true,

@@ -2,6 +2,7 @@ import {
   Injectable,
   UnauthorizedException,
   ConflictException,
+  BadRequestException,
   Inject,
   Logger,
 } from '@nestjs/common';
@@ -41,6 +42,34 @@ export interface SanitizedUser {
   avatarR2Key: string | null;
 }
 
+/**
+ * Parses duration strings like '7d', '24h', '60m', '3600s', or raw numeric strings into seconds
+ */
+export function parseDurationToSeconds(duration: string): number {
+  const trimmed = duration.trim();
+  if (/^\d+$/.test(trimmed)) {
+    return parseInt(trimmed, 10);
+  }
+  const match = trimmed.match(/^(\d+)([smhd])$/i);
+  if (!match) {
+    return 7 * 24 * 60 * 60; // fallback to 7 days
+  }
+  const value = parseInt(match[1], 10);
+  const unit = match[2].toLowerCase();
+  switch (unit) {
+    case 's':
+      return value;
+    case 'm':
+      return value * 60;
+    case 'h':
+      return value * 3600;
+    case 'd':
+      return value * 86400;
+    default:
+      return 7 * 24 * 60 * 60;
+  }
+}
+
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
@@ -57,36 +86,67 @@ export class AuthService {
    * Register a new user with phone & password (for Doctors, Admins, Receptionists, Staff)
    */
   async register(dto: RegisterUserDto): Promise<{ user: SanitizedUser } & AuthTokens> {
-    const [existing] = await this.db
+    const cleanPhone = dto.phone.trim();
+    const cleanEmail = dto.email ? dto.email.trim().toLowerCase() : null;
+
+    // Check duplicate phone
+    const [existingPhone] = await this.db
       .select({ id: users.id })
       .from(users)
-      .where(eq(users.phone, dto.phone.trim()))
+      .where(eq(users.phone, cleanPhone))
       .limit(1);
 
-    if (existing) {
-      throw new ConflictException(`Phone number ${dto.phone} is already registered`);
+    if (existingPhone) {
+      throw new ConflictException(`Phone number ${cleanPhone} is already registered`);
+    }
+
+    // Check duplicate email if provided
+    if (cleanEmail) {
+      const [existingEmail] = await this.db
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.email, cleanEmail))
+        .limit(1);
+
+      if (existingEmail) {
+        throw new ConflictException('Email address is already registered');
+      }
     }
 
     const saltRounds = 10;
     const passwordHash = await bcrypt.hash(dto.password, saltRounds);
 
-    const [newUser] = await this.db
-      .insert(users)
-      .values({
-        phone: dto.phone.trim(),
-        fullName: dto.fullName.trim(),
-        email: dto.email ? dto.email.trim().toLowerCase() : null,
-        passwordHash,
-        isPhoneVerified: false,
-        isActive: true,
-      })
-      .returning();
+    try {
+      const [newUser] = await this.db
+        .insert(users)
+        .values({
+          phone: cleanPhone,
+          fullName: dto.fullName.trim(),
+          email: cleanEmail,
+          passwordHash,
+          isPhoneVerified: false,
+          isActive: true,
+        })
+        .returning();
 
-    const tokens = await this.generateAndStoreTokens(newUser);
-    return {
-      user: this.sanitizeUser(newUser),
-      ...tokens,
-    };
+      const tokens = await this.generateAndStoreTokens(newUser);
+      return {
+        user: this.sanitizeUser(newUser),
+        ...tokens,
+      };
+    } catch (error: any) {
+      if (error?.code === '23505') {
+        const detail = error?.detail || error?.message || '';
+        if (detail.includes('email')) {
+          throw new ConflictException('Email address is already registered');
+        }
+        if (detail.includes('phone')) {
+          throw new ConflictException(`Phone number ${cleanPhone} is already registered`);
+        }
+        throw new ConflictException('A user with these unique credentials already exists');
+      }
+      throw error;
+    }
   }
 
   /**
@@ -126,7 +186,7 @@ export class AuthService {
   }
 
   /**
-   * Patient OTP Login: Generate a 6-digit OTP, store in Redis with 3-minute TTL (180s), and dispatch via BullMQ
+   * Patient OTP Login: Generate a 6-digit OTP, enforce 60s cooldown, store in Redis with 3-minute TTL (180s)
    */
   async requestOtp(dto: RequestOtpDto): Promise<{
     message: string;
@@ -134,11 +194,24 @@ export class AuthService {
     devOtp?: string;
   }> {
     const cleanPhone = dto.phone.trim();
+    const cooldownKey = `otp_cooldown:${cleanPhone}`;
+
+    // Enforce 60-second cooldown between OTP requests
+    const inCooldown = await this.redisService.exists(cooldownKey);
+    if (inCooldown) {
+      throw new BadRequestException('Please wait 60 seconds before requesting a new OTP');
+    }
+
     const otp = crypto.randomInt(100000, 1000000).toString();
     const ttlSeconds = 180; // 3 minutes
 
     const redisKey = `otp:${cleanPhone}`;
+    const attemptsKey = `otp_attempts:${cleanPhone}`;
+
     await this.redisService.set(redisKey, otp, ttlSeconds);
+    await this.redisService.set(cooldownKey, '1', 60);
+    // Reset previous attempt counter for the newly generated OTP
+    await this.redisService.del(attemptsKey);
 
     // Enqueue SMS job to BullMQ
     await this.smsQueue.add('send-otp', {
@@ -146,7 +219,7 @@ export class AuthService {
       message: `Your verification code is ${otp}. Valid for 3 minutes.`,
     });
 
-    this.logger.log(`Generated OTP for ${cleanPhone} (TTL: ${ttlSeconds}s)`);
+    this.logger.log(`Generated OTP for ${cleanPhone} (TTL: ${ttlSeconds}s, Cooldown: 60s)`);
 
     const isDevelopment = this.configService.get<string>('NODE_ENV') !== 'production';
 
@@ -158,19 +231,38 @@ export class AuthService {
   }
 
   /**
-   * Verify patient OTP, register on-the-fly if new, and issue JWT tokens
+   * Verify patient OTP with brute-force attempt protection (Max 5 attempts), register if new, and issue JWT tokens
    */
   async verifyOtp(dto: VerifyOtpDto): Promise<{ user: SanitizedUser; isNewUser: boolean } & AuthTokens> {
     const cleanPhone = dto.phone.trim();
     const redisKey = `otp:${cleanPhone}`;
-    const storedOtp = await this.redisService.get(redisKey);
+    const attemptsKey = `otp_attempts:${cleanPhone}`;
 
-    if (!storedOtp || storedOtp !== dto.otp.trim()) {
+    const storedOtp = await this.redisService.get(redisKey);
+    if (!storedOtp) {
       throw new UnauthorizedException('Invalid or expired OTP code');
     }
 
-    // Single-use OTP: remove from Redis immediately
+    if (storedOtp !== dto.otp.trim()) {
+      const attempts = await this.redisService.incr(attemptsKey);
+      if (attempts === 1) {
+        await this.redisService.expire(attemptsKey, 180);
+      }
+
+      if (attempts >= 5) {
+        // Brute-force lockout: Invalidate OTP and attempts immediately
+        await this.redisService.del(redisKey);
+        await this.redisService.del(attemptsKey);
+        throw new UnauthorizedException('Too many failed OTP attempts. Please request a new OTP.');
+      }
+
+      const remaining = 5 - attempts;
+      throw new UnauthorizedException(`Invalid OTP code. ${remaining} attempt(s) remaining.`);
+    }
+
+    // Success: Remove single-use OTP and attempt counter from Redis immediately
     await this.redisService.del(redisKey);
+    await this.redisService.del(attemptsKey);
 
     let [user] = await this.db
       .select()
@@ -263,7 +355,7 @@ export class AuthService {
   }
 
   /**
-   * Helper: Generate access + refresh tokens and store refresh token hash in Redis
+   * Helper: Generate access + refresh tokens and store refresh token hash in Redis dynamically
    */
   private async generateAndStoreTokens(user: User): Promise<AuthTokens> {
     const payload: JwtPayload = {
@@ -289,8 +381,8 @@ export class AuthService {
       }),
     ]);
 
-    // Compute TTL for Redis storage (7 days = 604800 seconds)
-    const refreshTtlSeconds = 7 * 24 * 60 * 60;
+    // Parse dynamic refresh TTL from config (e.g. '7d' -> 604800, '24h' -> 86400)
+    const refreshTtlSeconds = parseDurationToSeconds(refreshExpiration);
     const refreshTokenHash = await bcrypt.hash(refreshToken, 10);
     const redisKey = `refresh_token:${user.id}`;
     await this.redisService.set(redisKey, refreshTokenHash, refreshTtlSeconds);

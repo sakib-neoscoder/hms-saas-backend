@@ -2,9 +2,9 @@ import { validateEnv } from './env.validation';
 
 describe('validateEnv', () => {
   const validConfig = {
-    PORT: '4000',
+    PORT: '8000',
     NODE_ENV: 'test',
-    DATABASE_URL: 'postgresql://clinic_user:clinic_password@localhost:5432/clinic_db',
+    DATABASE_URL: 'postgresql://clinic_user:clinic_password@localhost:5432/hms_master_db',
     REDIS_HOST: 'localhost',
     REDIS_PORT: '6379',
     JWT_ACCESS_SECRET: 'super_secret_access_token_min_16_chars_bd_clinic',
@@ -19,7 +19,7 @@ describe('validateEnv', () => {
 
   it('should successfully parse and coerce valid config', () => {
     const parsed = validateEnv(validConfig);
-    expect(parsed.PORT).toBe(4000);
+    expect(parsed.PORT).toBe(8000);
     expect(parsed.REDIS_PORT).toBe(6379);
     expect(parsed.NODE_ENV).toBe('test');
     expect(parsed.DATABASE_URL).toBe(validConfig.DATABASE_URL);

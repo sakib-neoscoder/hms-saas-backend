@@ -11,8 +11,9 @@ import { Reflector } from '@nestjs/core';
 import { and, eq } from 'drizzle-orm';
 import { ROLES_KEY, ClinicRole } from '../decorators/roles.decorator';
 import { AuthenticatedUser } from '../decorators/current-user.decorator';
+import { UUID_REGEX } from '../decorators/current-tenant.decorator';
 import { DRIZZLE_DB, DrizzleDB } from '../../database/database.module';
-import { clinicMembers } from '../../database/schema/clinics';
+import { clinics, clinicMembers } from '../../database/schema/clinics';
 
 @Injectable()
 export class TenantRoleGuard implements CanActivate {
@@ -45,37 +46,62 @@ export class TenantRoleGuard implements CanActivate {
       throw new BadRequestException('Multi-tenant "x-clinic-id" header is required for this operation');
     }
 
-    // Query active membership for the user in this specific clinic
-    const [membership] = await this.db
-      .select()
+    if (!UUID_REGEX.test(clinicId)) {
+      throw new BadRequestException('Invalid x-clinic-id UUID format');
+    }
+
+    // Query all active memberships for the user in this specific clinic, joining clinics to verify clinic status
+    const memberships = await this.db
+      .select({
+        id: clinicMembers.id,
+        clinicId: clinicMembers.clinicId,
+        userId: clinicMembers.userId,
+        role: clinicMembers.role,
+        isActive: clinicMembers.isActive,
+        createdAt: clinicMembers.createdAt,
+        clinicIsActive: clinics.isActive,
+      })
       .from(clinicMembers)
+      .innerJoin(clinics, eq(clinicMembers.clinicId, clinics.id))
       .where(
         and(
           eq(clinicMembers.clinicId, clinicId),
           eq(clinicMembers.userId, user.id),
           eq(clinicMembers.isActive, true),
         ),
-      )
-      .limit(1);
+      );
 
-    if (!membership) {
+    if (!memberships || memberships.length === 0) {
       throw new ForbiddenException('You do not have an active membership in this clinic');
     }
 
-    // SUPER_ADMIN has global bypass permissions
-    if (membership.role === 'SUPER_ADMIN') {
-      request.tenantMembership = membership;
+    // Verify clinic tenant itself is active
+    if (!memberships[0].clinicIsActive) {
+      throw new ForbiddenException('This clinic tenant is currently inactive');
+    }
+
+    // SUPER_ADMIN has global bypass permissions within the tenant
+    const superAdminMembership = memberships.find((m) => m.role === 'SUPER_ADMIN');
+    if (superAdminMembership) {
+      request.tenantMemberships = memberships;
+      request.tenantMembership = superAdminMembership;
       return true;
     }
 
-    const hasPermission = requiredRoles.includes(membership.role as ClinicRole);
-    if (!hasPermission) {
+    // Multi-role check: grant access if any of user's active roles in this clinic matches required roles
+    const matchedMembership = memberships.find((m) =>
+      requiredRoles.includes(m.role as ClinicRole),
+    );
+
+    if (!matchedMembership) {
+      const userRoles = memberships.map((m) => m.role).join(', ');
       throw new ForbiddenException(
-        `Role "${membership.role}" does not have required permissions: [${requiredRoles.join(', ')}]`,
+        `Role(s) [${userRoles}] do not have required permissions: [${requiredRoles.join(', ')}]`,
       );
     }
 
-    request.tenantMembership = membership;
+    request.tenantMemberships = memberships;
+    request.tenantMembership = matchedMembership;
     return true;
   }
 }

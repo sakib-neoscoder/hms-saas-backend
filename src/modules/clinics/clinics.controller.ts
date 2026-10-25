@@ -6,6 +6,8 @@ import {
   Param,
   UseGuards,
   ParseUUIDPipe,
+  ForbiddenException,
+  Req,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -14,12 +16,15 @@ import {
   ApiBearerAuth,
   ApiHeader,
 } from '@nestjs/swagger';
+import { Request } from 'express';
 import { ClinicsService } from './clinics.service';
 import { CreateClinicDto, AssignMemberDto } from './dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TenantRoleGuard } from '../../common/guards/tenant-role.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { CurrentTenant } from '../../common/decorators/current-tenant.decorator';
+import { ClinicMember } from '../../database/schema/clinics';
 
 @ApiTags('Clinics (Tenants)')
 @ApiBearerAuth()
@@ -47,10 +52,24 @@ export class ClinicsController {
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Get clinic tenant profile by ID' })
+  @UseGuards(TenantRoleGuard)
+  @Roles('SUPER_ADMIN', 'CLINIC_ADMIN', 'DOCTOR', 'RECEPTIONIST', 'ASSISTANT', 'LAB_TECH')
+  @ApiHeader({
+    name: 'x-clinic-id',
+    required: true,
+    description: 'Target Clinic Tenant UUID',
+  })
+  @ApiOperation({ summary: 'Get clinic tenant profile by ID (Tenant members only)' })
   @ApiResponse({ status: 200, description: 'Clinic details' })
+  @ApiResponse({ status: 403, description: 'Forbidden: Route clinic ID does not match x-clinic-id header or inactive tenant' })
   @ApiResponse({ status: 404, description: 'Clinic not found' })
-  async getClinicById(@Param('id', ParseUUIDPipe) id: string) {
+  async getClinicById(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentTenant() headerClinicId: string,
+  ) {
+    if (id !== headerClinicId) {
+      throw new ForbiddenException('Route clinic ID does not match x-clinic-id header');
+    }
     return this.clinicsService.getClinicById(id);
   }
 
@@ -64,12 +83,18 @@ export class ClinicsController {
   })
   @ApiOperation({ summary: 'Assign a user as staff/doctor member in this clinic (Requires SUPER_ADMIN or CLINIC_ADMIN)' })
   @ApiResponse({ status: 201, description: 'Member assigned successfully' })
-  @ApiResponse({ status: 403, description: 'Forbidden: Insufficient tenant permissions' })
+  @ApiResponse({ status: 403, description: 'Forbidden: Route clinic ID mismatch or insufficient tenant permissions' })
   async assignMember(
     @Param('id', ParseUUIDPipe) clinicId: string,
+    @CurrentTenant() headerClinicId: string,
     @Body() dto: AssignMemberDto,
+    @Req() req: Request & { tenantMembership?: ClinicMember },
   ) {
-    return this.clinicsService.assignMember(clinicId, dto);
+    if (clinicId !== headerClinicId) {
+      throw new ForbiddenException('Route clinic ID does not match x-clinic-id header');
+    }
+    const callerRole = req.tenantMembership?.role;
+    return this.clinicsService.assignMember(clinicId, dto, callerRole);
   }
 
   @Get(':id/members')
@@ -82,7 +107,14 @@ export class ClinicsController {
   })
   @ApiOperation({ summary: 'List all staff & doctor members in this clinic' })
   @ApiResponse({ status: 200, description: 'List of clinic members' })
-  async getClinicMembers(@Param('id', ParseUUIDPipe) clinicId: string) {
+  @ApiResponse({ status: 403, description: 'Forbidden: Route clinic ID mismatch or insufficient tenant permissions' })
+  async getClinicMembers(
+    @Param('id', ParseUUIDPipe) clinicId: string,
+    @CurrentTenant() headerClinicId: string,
+  ) {
+    if (clinicId !== headerClinicId) {
+      throw new ForbiddenException('Route clinic ID does not match x-clinic-id header');
+    }
     return this.clinicsService.getClinicMembers(clinicId);
   }
 }

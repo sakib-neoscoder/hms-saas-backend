@@ -2,6 +2,7 @@ import {
   Injectable,
   ConflictException,
   NotFoundException,
+  ForbiddenException,
   Inject,
   Logger,
 } from '@nestjs/common';
@@ -18,7 +19,7 @@ export class ClinicsService {
   constructor(@Inject(DRIZZLE_DB) private readonly db: DrizzleDB) {}
 
   /**
-   * Create a new clinic tenant and automatically assign creator as SUPER_ADMIN
+   * Create a new clinic tenant and automatically assign creator as SUPER_ADMIN inside an atomic transaction
    */
   async createClinic(
     dto: CreateClinicDto,
@@ -36,44 +37,55 @@ export class ClinicsService {
       throw new ConflictException(`Clinic slug "${cleanSlug}" is already taken`);
     }
 
-    const [newClinic] = await this.db
-      .insert(clinics)
-      .values({
-        name: dto.name.trim(),
-        nameBn: dto.nameBn?.trim(),
-        slug: cleanSlug,
-        phone: dto.phone.trim(),
-        address: dto.address.trim(),
-        district: dto.district.trim(),
-        upazila: dto.upazila?.trim(),
-        dghsRegNo: dto.dghsRegNo?.trim(),
-        smsSenderId: dto.smsSenderId?.trim(),
-        smsBalance: 50, // Welcome credit: 50 SMS
-        subscriptionPlan: 'BASIC',
-        isActive: true,
-      })
-      .returning();
+    return await this.db.transaction(async (tx) => {
+      const [newClinic] = await tx
+        .insert(clinics)
+        .values({
+          name: dto.name.trim(),
+          nameBn: dto.nameBn?.trim(),
+          slug: cleanSlug,
+          phone: dto.phone.trim(),
+          address: dto.address.trim(),
+          district: dto.district.trim(),
+          upazila: dto.upazila?.trim(),
+          dghsRegNo: dto.dghsRegNo?.trim(),
+          smsSenderId: dto.smsSenderId?.trim(),
+          smsBalance: 50, // Welcome credit: 50 SMS
+          subscriptionPlan: 'BASIC',
+          isActive: true,
+        })
+        .returning();
 
-    // Assign the creator as SUPER_ADMIN
-    const [membership] = await this.db
-      .insert(clinicMembers)
-      .values({
-        clinicId: newClinic.id,
-        userId: creatorUserId,
-        role: 'SUPER_ADMIN',
-        isActive: true,
-      })
-      .returning();
+      // Assign the creator as SUPER_ADMIN inside the same atomic transaction
+      const [membership] = await tx
+        .insert(clinicMembers)
+        .values({
+          clinicId: newClinic.id,
+          userId: creatorUserId,
+          role: 'SUPER_ADMIN',
+          isActive: true,
+        })
+        .returning();
 
-    this.logger.log(`Created new clinic "${newClinic.name}" (${newClinic.id}) by user ${creatorUserId}`);
+      this.logger.log(`Created new clinic "${newClinic.name}" (${newClinic.id}) by user ${creatorUserId}`);
 
-    return { clinic: newClinic, membership };
+      return { clinic: newClinic, membership };
+    });
   }
 
   /**
-   * Assign a user to a specific clinic with a defined role
+   * Assign a user to a specific clinic with a defined role, preventing privilege escalation
    */
-  async assignMember(clinicId: string, dto: AssignMemberDto): Promise<ClinicMember> {
+  async assignMember(
+    clinicId: string,
+    dto: AssignMemberDto,
+    callerRole?: string,
+  ): Promise<ClinicMember> {
+    // Prevent privilege escalation: Only a SUPER_ADMIN can assign the SUPER_ADMIN role
+    if (dto.role === 'SUPER_ADMIN' && callerRole !== 'SUPER_ADMIN') {
+      throw new ForbiddenException('Only a SUPER_ADMIN can assign the SUPER_ADMIN role');
+    }
+
     const [clinic] = await this.db
       .select({ id: clinics.id })
       .from(clinics)

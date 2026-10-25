@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "idx_clinic_lab_tests_clinic_code" ON "clinic_lab_tests" USING btree ("clinic_id","test_code");
